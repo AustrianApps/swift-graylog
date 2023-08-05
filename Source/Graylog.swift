@@ -269,7 +269,7 @@ public class Graylog {
     private func postBulkLogRequest(logs: [LogElement], completion: @escaping (_ success: Bool) -> Void) {
       postLogRequestBody(serializeBody: {
         try logs.map { log in
-          try JSONSerialization.data(withJSONObject: log, options: jsonWritingOptions())
+          try JSONSerialization.data(withJSONObject: log.values, options: jsonWritingOptions())
         } .map { data in
           String(data: data, encoding: .utf8)! as String
         }.joined(separator: "\n").data(using: .utf8)!
