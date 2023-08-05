@@ -336,4 +336,13 @@ extension Graylog {
 
         Graylog.shared.log(LogElement(values: values))
     }
+
+    public static var useBulkMode: Bool {
+      set {
+        Graylog.shared.useBulkMode = newValue
+      }
+      get {
+        Graylog.shared.useBulkMode
+      }
+    }
 }
