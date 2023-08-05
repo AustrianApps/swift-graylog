@@ -7,6 +7,9 @@
 //
 
 import Foundation
+#if os(watchOS)
+  import WatchKit
+#endif
 
 /// Logger in charge of sending logs to Graylog.
 /// If a log upload fails it will store pending logs locally (in the user defaults).
@@ -84,9 +87,15 @@ public class Graylog {
     // MARK: - init
 
     init() {
+      #if os(iOS)
         NotificationCenter.default.addObserver(self, selector: #selector(applicationDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
 
         NotificationCenter.default.addObserver(self, selector: #selector(applicationWillResignActive), name: UIApplication.willResignActiveNotification, object: nil)
+      #elseif os(watchOS)
+        NotificationCenter.default.addObserver(self, selector: #selector(applicationDidBecomeActive), name: WKExtension.applicationDidBecomeActiveNotification, object: nil)
+
+        NotificationCenter.default.addObserver(self, selector: #selector(applicationWillResignActive), name: WKExtension.applicationWillResignActiveNotification, object: nil)
+      #endif
 
         sendLogsTimer = BackgroundRepeatingTimer(timeInterval: Graylog.timeInterval, queue: timerSerialQueue) { [weak self] in
             // Send pending logs synchronising logs
