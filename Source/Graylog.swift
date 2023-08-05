@@ -56,6 +56,8 @@ public class Graylog {
     // MARK: - Vars
 
     var graylogURL: URL?
+  
+    var useBulkMode: Bool = false
 
     /// Timer which will fire after each `timeInterval` on a specific thread.
     var sendLogsTimer: BackgroundRepeatingTimer?
@@ -199,6 +201,17 @@ public class Graylog {
             return
         }
 
+        if useBulkMode {
+          let logs = pendingLogsBatch
+          postBulkLogRequest(logs: logs) { success in
+            if success {
+              for log in logs {
+                self.completeLog(log: log)
+              }
+            }
+          }
+        }
+
         let group = DispatchGroup()
 
         pendingLogsBatch.forEach { log in
@@ -225,12 +238,37 @@ public class Graylog {
         }
     }
 
+    private func jsonWritingOptions() -> JSONSerialization.WritingOptions {
+      if useBulkMode {
+        return JSONSerialization.WritingOptions()
+      } else {
+        return .prettyPrinted
+      }
+    }
+
     /// Http request to send the log on the Graylog server.
     ///
     /// - Parameters:
     ///   - log: Log information to send to the server.
     ///   - completion: Called when the HTTP request is done or if it fails.
     private func postLogRequest(log: LogElement, completion: @escaping (_ success: Bool) -> Void) {
+      postLogRequestBody(serializeBody: {
+        try JSONSerialization.data(withJSONObject: log.values, options: jsonWritingOptions())
+      }, completion: completion)
+    }
+
+    private func postBulkLogRequest(logs: [LogElement], completion: @escaping (_ success: Bool) -> Void) {
+      postLogRequestBody(serializeBody: {
+        try logs.map { log in
+          try JSONSerialization.data(withJSONObject: log, options: jsonWritingOptions())
+        } .map { data in
+          String(data: data, encoding: .utf8)! as String
+        }.joined(separator: "\n").data(using: .utf8)!
+      }, completion: completion)
+    }
+
+
+    private func postLogRequestBody(serializeBody: () throws -> Data, completion: @escaping (_ success: Bool) -> Void) {
         do {
             guard let graylogURL = graylogURL else {
                 print("Error! We are unable to send log to Graylog. No graylogURL set.")
@@ -242,7 +280,7 @@ public class Graylog {
 
             var urlRequest = try URLRequest(url: graylogURL, method: method)
 
-            let body = try JSONSerialization.data(withJSONObject: log.values, options: .prettyPrinted)
+            let body = try serializeBody()
 
             urlRequest.httpBody = body
 
