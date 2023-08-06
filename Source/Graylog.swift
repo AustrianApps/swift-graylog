@@ -11,6 +11,41 @@ import Foundation
   import WatchKit
 #endif
 
+public struct GraylogConfig {
+  public init(
+    graylogURL: URL?,
+    useBulkMode: Bool = false,
+    batchCount: Int = 10,
+    timeInterval: TimeInterval = 60,
+    queuePrefix: String = "graylog.queue",
+    maximumLogsCount: Int = 1000
+  ) {
+    self.graylogURL = graylogURL
+    self.useBulkMode = useBulkMode
+    self.batchCount = batchCount
+    self.timeInterval = timeInterval
+    self.queuePrefix = queuePrefix
+    self.maximumLogsCount = maximumLogsCount
+  }
+
+  public let graylogURL: URL?
+
+  public let useBulkMode: Bool
+
+  /// Number of logs we try to send at each timer tick.
+  public let batchCount: Int
+
+  /// Time (in seconds) within the `sendsLogTimer` will fire to try to upload pending logs.
+  public let timeInterval: TimeInterval
+
+  /// Prefix of GCD queues labels.
+  public let queuePrefix: String
+
+  /// Maximum number of logs we store in the User Defaults.
+  public let maximumLogsCount: Int
+
+}
+
 /// Logger in charge of sending logs to Graylog.
 /// If a log upload fails it will store pending logs locally (in the user defaults).
 /// Will retry X seconds to re-upload failed logs.
@@ -36,31 +71,30 @@ import Foundation
 public class Graylog {
     // MARK: - Statics
 
-    static let shared = Graylog()
+    private static var internalShared: Graylog?
+    static var shared: Graylog {
+      get {
+        if let graylog = internalShared {
+          return graylog
+        }
+        let graylog = Graylog(config: GraylogConfig(graylogURL: URL(string: "https://example.com/")!))
+        internalShared = graylog
+        return graylog
+      }
+      set {
+        if let graylog = internalShared {
+          graylog.dispose()
+        }
+        internalShared = newValue
+      }
+    }
 
     /// Key in front of which we save logs in the User Defaults.
     static let userDefaultsKey = "graylog.logs"
 
-    /// Number of logs we try to send at each timer tick.
-    static var batchCount = 10
-
-    /// Time (in seconds) within the `sendsLogTimer` will fire to try to upload pending logs.
-    static let timeInterval: TimeInterval = 60
-
-    /// Prefix of GCD queues labels.
-    static let queuePrefix = "graylog.queue"
-
-    /// Maximum number of logs we store in the User Defaults.
-    static let maximumLogsCount = 1000
-
-    // We truncate logs to 250 characters max (to avoid full html pages in case of server issues)
-    let logMessageMaxLength = 250
+    private let config: GraylogConfig
 
     // MARK: - Vars
-
-    var graylogURL: URL?
-  
-    var useBulkMode: Bool = false
 
     /// Timer which will fire after each `timeInterval` on a specific thread.
     var sendLogsTimer: BackgroundRepeatingTimer?
@@ -79,14 +113,17 @@ public class Graylog {
     /// We synchronise each operations on the same serial queue to be sure we don't
     /// loose some logs by reading or writing concurrently the pending logs from different
     /// threads.
-    let logsReadWriteSerialQueue = DispatchQueue(label: "\(Graylog.queuePrefix).logs.readwrite")
+    let logsReadWriteSerialQueue: DispatchQueue
 
     /// A serial queue into which the timer will live and fire.
-    let timerSerialQueue = DispatchQueue(label: "\(Graylog.queuePrefix).timer")
+    let timerSerialQueue: DispatchQueue
 
     // MARK: - init
 
-    init() {
+    init(config: GraylogConfig) {
+      self.config = config
+      logsReadWriteSerialQueue = DispatchQueue(label: "\(config.queuePrefix).logs.readwrite")
+      timerSerialQueue = DispatchQueue(label: "\(config.queuePrefix).timer")
       #if os(iOS)
         NotificationCenter.default.addObserver(self, selector: #selector(applicationDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
 
@@ -97,7 +134,7 @@ public class Graylog {
         NotificationCenter.default.addObserver(self, selector: #selector(applicationWillResignActive), name: WKExtension.applicationWillResignActiveNotification, object: nil)
       #endif
 
-        sendLogsTimer = BackgroundRepeatingTimer(timeInterval: Graylog.timeInterval, queue: timerSerialQueue) { [weak self] in
+        sendLogsTimer = BackgroundRepeatingTimer(timeInterval: config.timeInterval, queue: timerSerialQueue) { [weak self] in
             // Send pending logs synchronising logs
             // read/write operations.
             self?.logsReadWriteSerialQueue.sync {
@@ -110,6 +147,9 @@ public class Graylog {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+    }
+
+    private func dispose() {
     }
 
     // MARK: - Logs operations
@@ -135,7 +175,7 @@ public class Graylog {
     func insert(logs: [LogElement], at position: ArrayPosition) {
         var resultLogs = pendingLogs() ?? []
 
-        guard resultLogs.count + logs.count < Graylog.maximumLogsCount else {
+        guard resultLogs.count + logs.count < config.maximumLogsCount else {
             return
         }
 
@@ -186,7 +226,7 @@ public class Graylog {
                 return
         }
 
-        pendingLogsBatch = logs.dequeueFirst(Graylog.batchCount)
+        pendingLogsBatch = logs.dequeueFirst(config.batchCount)
 
         save(logs: logs)
     }
@@ -210,7 +250,7 @@ public class Graylog {
             return
         }
 
-        if useBulkMode {
+        if config.useBulkMode {
           let logs = pendingLogsBatch
           postBulkLogRequest(logs: logs) { success in
             if success {
@@ -248,7 +288,7 @@ public class Graylog {
     }
 
     private func jsonWritingOptions() -> JSONSerialization.WritingOptions {
-      if useBulkMode {
+      if config.useBulkMode {
         return JSONSerialization.WritingOptions()
       } else {
         return .prettyPrinted
@@ -279,7 +319,7 @@ public class Graylog {
 
     private func postLogRequestBody(serializeBody: () throws -> Data, completion: @escaping (_ success: Bool) -> Void) {
         do {
-            guard let graylogURL = graylogURL else {
+            guard let graylogURL = config.graylogURL else {
                 print("Error! We are unable to send log to Graylog. No graylogURL set.")
                 completion(false)
                 return
@@ -321,28 +361,25 @@ extension Graylog {
 }
 
 extension Graylog {
+    public static func setup(config: GraylogConfig) -> Graylog {
+        Graylog.shared = Graylog(config: config)
+        return Graylog.shared
+    }
+
     /// Set Graylog server API (`gelf`) URL.
     ///
     /// - Parameter url: Graylog server `gelf` URL.
     public static func setURL(_ url: URL) {
-        Graylog.shared.graylogURL = url
+        _ = setup(config: GraylogConfig(graylogURL: url))
     }
 
     /// Sends a log to Graylog. If it fails, we queue it and we retry the queued logs each minute.
     ///
     /// - Parameter values: JSON dictionary to be sent to Graylog. See http://docs.graylog.org/en/2.4/pages/gelf.html for available fields.
     public static func log(_ values: LogValues) {
-        assert(Graylog.shared.graylogURL != nil)
+        assert(Graylog.shared.config.graylogURL != nil)
 
         Graylog.shared.log(LogElement(values: values))
     }
 
-    public static var useBulkMode: Bool {
-      set {
-        Graylog.shared.useBulkMode = newValue
-      }
-      get {
-        Graylog.shared.useBulkMode
-      }
-    }
 }
