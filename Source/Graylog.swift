@@ -18,7 +18,8 @@ public struct GraylogConfig {
     batchCount: Int = 10,
     timeInterval: TimeInterval = 60,
     queuePrefix: String = "graylog.queue",
-    maximumLogsCount: Int = 1000
+    maximumLogsCount: Int = 1000,
+    storeInUserDefaults: Bool = true
   ) {
     self.graylogURL = graylogURL
     self.useBulkMode = useBulkMode
@@ -26,6 +27,7 @@ public struct GraylogConfig {
     self.timeInterval = timeInterval
     self.queuePrefix = queuePrefix
     self.maximumLogsCount = maximumLogsCount
+    self.storeInUserDefaults = storeInUserDefaults
   }
 
   public let graylogURL: URL?
@@ -43,6 +45,8 @@ public struct GraylogConfig {
 
   /// Maximum number of logs we store in the User Defaults.
   public let maximumLogsCount: Int
+  
+  public let storeInUserDefaults: Bool
 
 }
 
@@ -101,6 +105,9 @@ public class Graylog {
 
     /// Batch of logs that we will try to send each time the timer fires (`timeInterval`).
     var pendingLogsBatch: [LogElement] = []
+
+    //// Used if storing into UserDefaults is disabled.
+    var memoryStorage: [LogElement] = []
 
     /// User Defaults instance used to save pending logs.
     var userDefaults: UserDefaults {
@@ -189,6 +196,10 @@ public class Graylog {
     /// - Parameters:
     ///   - logs: New logs list.
     func save(logs: [LogElement]) {
+        if !config.storeInUserDefaults {
+          memoryStorage = logs
+          return
+        }
         let values = logs.map { return $0.values }
         userDefaults.set(values, forKey: Graylog.userDefaultsKey)
     }
@@ -197,6 +208,9 @@ public class Graylog {
     ///
     /// - Returns: All pending logs list.
     func pendingLogs() -> [LogElement]? {
+        if !config.storeInUserDefaults {
+          return memoryStorage
+        }
         guard let values = userDefaults.array(forKey: Graylog.userDefaultsKey) as? [LogValues] else {
             return nil
         }
@@ -315,7 +329,6 @@ public class Graylog {
         }.joined(separator: "\n").data(using: .utf8)!
       }, completion: completion)
     }
-
 
     private func postLogRequestBody(serializeBody: () throws -> Data, completion: @escaping (_ success: Bool) -> Void) {
         do {
